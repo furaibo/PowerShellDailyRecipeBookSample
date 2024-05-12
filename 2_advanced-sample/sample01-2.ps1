@@ -1,0 +1,1 @@
+choco install -y pdftk imageMagick.app ghostscript ffmpeg sox.portable yt-dlp zbar
