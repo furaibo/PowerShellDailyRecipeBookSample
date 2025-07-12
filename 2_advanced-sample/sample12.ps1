@@ -5,6 +5,13 @@ Param([switch]$reuse)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# マウスイベントの定義
+$signature = @'
+[DllImport("user32.dll")]
+public static extern void mouse_event(long dwFlags, long dx, long dy, long cButtons, long dwExtraInfo);
+'@
+$global:mouseEvent = Add-Type -MemberDefinition $signature -Name "Win32MouseEvent" -Namespace Win32Functions -PassThru
+
 # キャプチャ関連設定のクラス(json形式用)
 class CaptureConfig {
     [int] $rectX
@@ -14,6 +21,8 @@ class CaptureConfig {
     [int] $waitSecond
     [string] $imageExt
     [string] $autoPressKey
+    [int] $autoClickPosX
+    [int] $autoClickPosY
 }
 
 # グローバル変数定義
@@ -87,6 +96,16 @@ function Get-DragRectArea() {
     return $rect
 }
 
+# マウスクリック座標の座標取得
+function Get-ClickPos() {
+    Write-Host "自動でマウスクリックする座標を指定して下さい(左クリック)"
+    while ([System.Windows.Forms.Control]::MouseButtons -ne 'Left') {
+        Start-Sleep 0.5 }
+    $pos = [System.Windows.Forms.Control]::MousePosition
+    Write-Host "Pressed"
+    return $pos
+}
+
 # キャプチャ間隔秒数の取得
 function Get-WaitSecond() {
     $inputString = Read-Host -Prompt `
@@ -108,13 +127,14 @@ function Get-WaitSecond() {
 function Get-PressKey() {
     $pressKey = $global:autoPressKeyDefault
     $inputString = Read-Host -Prompt `
-        "自動押下キーを選択してください ... 1: Right(→), 2: Left(←), 3: Enter (デフォルト: Right)"
+        "自動押下キーを選択してください ... 1: Right(→), 2: Left(←), 3: Enter, 4: Click (デフォルト: Right)"
     $selectNumber = [int]$inputString
 
     switch ($selectNumber) {
         1 { $pressKey = "{Right}" }
         2 { $pressKey = "{Left}" }
         3 { $pressKey = "{Enter}" }
+        4 { $pressKey = "{Click}"}
     }
 
     return $pressKey
@@ -157,6 +177,8 @@ if ($configExists) {
     $conf.waitSecond = $json.waitSecond
     $conf.imageExt = $json.imageExt
     $conf.autoPressKey = $json.autoPressKey
+    $conf.autoClickPosX = $json.autoClickPosX
+    $conf.autoClickPosY = $json.autoClickPosY
     $imageFormat = Get-ImageFormatFromExt $conf.imageExt
     $captureRect = [System.Drawing.Rectangle]::FromLTRB(
         $conf.rectX, $conf.rectY,
@@ -208,6 +230,17 @@ if ($configExists) {
         $response = Read-Host -Prompt `
             "自動押下キー: $($conf.autoPressKey) ... OK?(y/n)"
     } until ($response -eq 'y')
+
+    # 入力キーとしてクリック指定の場合はクリック座標も取得
+    if ($conf.autoPressKey -eq '{Click}') {
+        do {
+            $pos = Get-ClickPos
+            $conf.autoClickPosX = $pos.X
+            $conf.autoClickPosY = $pos.Y
+            $response = Read-Host -Prompt `
+                "クリック座標: ($($pos.X), $($pos.Y)) ... OK?(y/n)"
+        } until ($response -eq 'y')
+    }
 }
 
 # キャプチャ開始前のメッセージ表示・スリープ時間
@@ -240,7 +273,16 @@ for ($i=1; $i -le $pageCount; $i++){
     if ($i % 10 -eq 0) { Write-Host "${i}ページ取得完了..." }
 
     # キー押下処理の実行
-    [System.Windows.Forms.SendKeys]::SendWait($conf.autoPressKey)
+    if ($conf.autoPressKey -eq "{Click}") {
+        # マウスカーソル移動および左クリックイベントの発火
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(
+            $conf.autoClickPosX, $conf.autoClickPosY)
+        $global:mouseEvent::mouse_event(0x0002, 0, 0, 0, 0);
+        $global:mouseEvent::mouse_event(0x0004, 0, 0, 0, 0);
+    } else {
+        # キーボード内のキー押下の実行
+        [System.Windows.Forms.SendKeys]::SendWait($conf.autoPressKey)
+    }
 
     # 指定秒数分のスリープ
     Start-Sleep $conf.waitSecond
